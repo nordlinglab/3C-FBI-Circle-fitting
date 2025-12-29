@@ -260,4 +260,4 @@ if __name__ == "__main__":
         if center[0] == -1:
             print("No circle detected")
         else:
-            print(f"center=({center[0]:.2f}, {center[1]:.2f}), radius={radius:.2f}")s
+            print(f"center=({center[0]:.2f}, {center[1]:.2f}), radius={radius:.2f}")
