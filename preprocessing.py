@@ -1,342 +1,219 @@
-"""
-Preprocessing for Black Sphere Circle Detection
-
-Applies green background filtering using two methods:
-1. Green Level (GL): HSV thresholding with varying saturation/value levels
-2. Median (Med): Median filtering followed by adaptive HSV thresholding
-
-Main function: preprocess_image(bs_image, gb_image, method, return_edgels)
-"""
-
-import numpy as np
 import cv2
-
+import numpy as np
+import os
 
 def auto_canny(image, sigma=0.33):
     """
-    Automatic Canny edge detection with automatic threshold selection.
+    Auto threshold Canny edge detector.
+    
+    Automatically determines thresholds based on image median.
     
     Parameters
     ----------
     image : numpy.ndarray
-        Grayscale input image
-    sigma : float, optional
-        Sigma value for threshold calculation (default: 0.33)
+        Input image (single channel)
+    sigma : float
+        Threshold factor (default: 0.33)
         
     Returns
     -------
-    edges : numpy.ndarray
-        Binary edge map
+    edged : numpy.ndarray
+        Binary edge image
+        
+    Reference
+    ---------
+    https://github.com/oleg-Shipitko/Image-processing-Python/blob/master/auto_canny.py
     """
-    # Compute median of pixel intensities
     v = np.median(image)
-    
-    # Compute lower and upper thresholds
     lower = int(max(0, (1.0 - sigma) * v))
     upper = int(min(255, (1.0 + sigma) * v))
-    
-    # Apply Canny edge detection
-    edges = cv2.Canny(image, lower, upper)
-    
-    return edges
+    edged = cv2.Canny(image, lower, upper)
+    return edged
 
-
-def frames_to_edgepoints(edge_image):
+def frames_to_edgepoints(img):
     """
-    Convert binary edge image to array of edge point coordinates.
+    Extract edge point coordinates from binary edge image.
     
     Parameters
     ----------
-    edge_image : numpy.ndarray
-        Binary edge image (0 or 1 values)
+    img : numpy.ndarray
+        Binary edge image (0-1 or 0-255)
         
     Returns
     -------
-    edgels : numpy.ndarray or bool
-        Array of shape (n, 2) with (x, y) coordinates, or False if no edges
+    XY : numpy.ndarray
+        Edge point coordinates, shape (N, 2) as [[row, col], ...]
     """
-    # Find edge points
-    y, x = np.where(edge_image == 1)
-    
-    if len(x) == 0:
-        return False
-    
-    # Return as (x, y) coordinates
-    edgels = np.column_stack((x, y))
-    
-    return edgels
+    img = img / np.max(img)
+    x, y = np.where(img == 1)
+    XY = np.zeros((len(x), 2))
+    for i in range(len(x)):
+        XY[i, 0] = x[i]
+        XY[i, 1] = y[i]
+    return XY
 
-
-def _preprocess_green_level(bs_image, green_level):
+def preprocess_green_level(BS_crop, green_level):
     """
-    Preprocess using green level filtering method.
-    
-    Applies HSV thresholding with fixed hue range and variable saturation/value.
+    Preprocess image using green level thresholding in HSV space.
     
     Parameters
     ----------
-    bs_image : numpy.ndarray
-        Black sphere ROI image (BGR format)
+    BS_crop : numpy.ndarray
+        Input BGR image
     green_level : int
-        Lower threshold for saturation and value (70-88 typical)
+        Green threshold level (70-86 recommended)
         
     Returns
     -------
-    edge_image : numpy.ndarray
-        Binary edge image
+    GreenMask : numpy.ndarray
+        Binary mask after thresholding
+    GreenCanny : numpy.ndarray
+        Edge image (0-255 values)
+    edgels : numpy.ndarray
+        Edge point coordinates, shape (N, 2) as [[row, col], ...]
     """
-    # Convert to HSV
-    hsv = cv2.cvtColor(bs_image, cv2.COLOR_BGR2HSV)
-    
-    # Define green color range
-    # Hue: 36-86 (green in HSV)
-    # Saturation: green_level to 255
-    # Value: green_level to 255
-    lower_green = np.array([36, green_level, green_level], dtype=np.uint8)
-    upper_green = np.array([86, 255, 255], dtype=np.uint8)
-    
-    # Create green mask
-    green_mask = cv2.inRange(hsv, lower_green, upper_green)
-    
-    # Apply Canny edge detection
-    edges = auto_canny(green_mask)
-    
-    # Normalize to 0-1
-    edge_image = edges / 255
-    
-    return edge_image
+    BS_HSV = cv2.cvtColor(BS_crop, cv2.COLOR_BGR2HSV)
+    greenlower = np.array([36, green_level, green_level], dtype=np.uint8)
+    greenupper = np.array([86, 255, 255], dtype=np.uint8)
+    GreenMask = cv2.inRange(BS_HSV, greenlower, greenupper)
+    GreenCanny = auto_canny(np.uint8(GreenMask))
+    edgels = frames_to_edgepoints(GreenCanny / 255)
+    return GreenMask, GreenCanny, edgels
 
-
-def _preprocess_median(bs_image, gb_image, median_size):
+def preprocess_median_filter(BS_crop, G_crop, median_size):
     """
-    Preprocess using median filtering method.
-    
-    Applies median blur, then uses green background statistics to create
-    adaptive HSV thresholding.
+    Preprocess image using median filtering.
     
     Parameters
     ----------
-    bs_image : numpy.ndarray
-        Black sphere ROI image (BGR format)
-    gb_image : numpy.ndarray
-        Green background ROI image (BGR format)
+    BS_crop : numpy.ndarray
+        Input BGR image (black sphere region)
+    G_crop : numpy.ndarray
+        Green background reference image
     median_size : int
-        Size of median filter kernel (must be odd, 3-19 typical)
+        Median filter kernel size (must be odd: 3, 5, 7, ...)
         
     Returns
     -------
-    edge_image : numpy.ndarray
-        Binary edge image
+    GreenMask : numpy.ndarray
+        Binary mask after filtering and thresholding
+    GreenCanny : numpy.ndarray
+        Edge image (0-255 values)
+    edgels : numpy.ndarray
+        Edge point coordinates, shape (N, 2) as [[row, col], ...]
     """
-    # Apply median filter to black sphere image
-    median_filtered = cv2.medianBlur(bs_image, median_size)
+    # Calculate green color range from reference
+    rows, cols = G_crop.shape[0], G_crop.shape[1]
+    green = np.zeros((rows * cols, 3))
+    G_crop_HSV = cv2.cvtColor(G_crop, cv2.COLOR_BGR2HSV)
     
-    # Convert to HSV
-    hsv = cv2.cvtColor(median_filtered, cv2.COLOR_BGR2HSV)
+    for ch in range(3):
+        for row in range(rows):
+            for col in range(cols):
+                green[row * cols + col, ch] = G_crop_HSV[row, col, ch]
     
-    # Analyze green background to determine adaptive thresholds
-    gb_hsv = cv2.cvtColor(gb_image, cv2.COLOR_BGR2HSV)
+    green_std = np.std(green, axis=0)
+    green_min = np.min(green, axis=0)
+    green_max = np.max(green, axis=0)
+    GL = np.maximum(0, np.floor(green_min - 5 * green_std))
+    GU = np.minimum(255, np.ceil(green_max + 5 * green_std))
     
-    # Flatten spatial dimensions
-    rows, cols = gb_hsv.shape[:2]
-    green_pixels = gb_hsv.reshape(rows * cols, 3)
+    # Apply median filter
+    median_filter = cv2.medianBlur(BS_crop, median_size)
+    HSV = cv2.cvtColor(median_filter, cv2.COLOR_BGR2HSV)
+    GreenMask = cv2.inRange(HSV, GL, GU)
+    GreenCanny = auto_canny(np.uint8(GreenMask))
+    edgels = frames_to_edgepoints(GreenCanny / 255)
     
-    # Compute statistics for each HSV channel
-    green_std = np.std(green_pixels, axis=0)
-    green_min = np.min(green_pixels, axis=0)
-    green_max = np.max(green_pixels, axis=0)
-    
-    # Adaptive thresholds: mean ± 5*std
-    lower_bound = np.maximum(0, np.floor(green_min - 5 * green_std))
-    upper_bound = np.minimum(255, np.ceil(green_max + 5 * green_std))
-    
-    # Create green mask using adaptive bounds
-    green_mask = cv2.inRange(hsv, lower_bound.astype(np.uint8), 
-                             upper_bound.astype(np.uint8))
-    
-    # Apply Canny edge detection
-    edges = auto_canny(green_mask)
-    
-    # Normalize to 0-1
-    edge_image = edges / 255
-    
-    return edge_image
+    return GreenMask, GreenCanny, edgels
+
+def get_preprocessing_configs():
+    """
+    Original preprocessing configuration generator.
+
+    Returns
+    -------
+    configs : list of dict
+        Each dict contains:
+            - 'name'         : str  (e.g. 'GL70', 'Med3')
+            - 'green_level'  : int or None
+            - 'median_size'  : int or None
+    """
+    configs = []
+
+    # Green-level thresholding
+    for green_level in [70, 72, 74, 76, 78, 80, 82, 84, 86]:
+        configs.append({
+            "name": f"GL{green_level}",
+            "green_level": green_level,
+            "median_size": None
+        })
+
+    # Median filtering
+    for median_size in [3, 5, 7, 9, 11, 13, 15, 17, 19]:
+        configs.append({
+            "name": f"Med{median_size}",
+            "green_level": None,
+            "median_size": median_size
+        })
+
+    return configs
 
 
-def preprocess_image(bs_image, gb_image=None, method='GL70', return_edgels=True):
+def preprocess_image(filename, method='green_level', param=76, hough=False):
     """
-    Preprocess black sphere image to extract edges or edge points.
-    
-    Supports two preprocessing methods:
-    1. Green Level (GL): HSV color filtering with fixed thresholds
-    2. Median (Med): Median filtering with adaptive thresholding
+    Load and preprocess image from ROI folders.
     
     Parameters
     ----------
-    bs_image : numpy.ndarray or str
-        Black sphere ROI image (BGR format) or path to image file
-    gb_image : numpy.ndarray or str, optional
-        Green background ROI image (BGR format) or path to image file
-        Required only for 'Med' methods
-    method : str, optional
-        Preprocessing method name (default: 'GL70')
-        Format: 'GL{level}' where level in [70, 72, 74, ..., 86]
-                'Med{size}' where size in [3, 5, 7, ..., 19]
-        Examples: 'GL70', 'GL80', 'Med3', 'Med11'
-    return_edgels : bool, optional
-        If True, returns edge point coordinates (default)
-        If False, returns binary edge image
+    filename : str
+        Image filename (without .png extension)
+    method : str
+        'green_level' or 'median_filter'
+    param : int
+        For green_level: threshold value (70-86)
+        For median_filter: kernel size (3, 5, 7, ...)
+    hough : bool
+        If True, returns edge image for HOUGH (default: False)
+        If False, returns edgels for CIBICA
         
     Returns
     -------
-    result : numpy.ndarray or bool
-        If return_edgels=True: Array of shape (n, 2) with (x, y) coordinates
-                               Returns False if no edges detected
-        If return_edgels=False: Binary edge image (values 0 or 1)
-        
-    Raises
-    ------
-    ValueError
-        If method format is invalid or parameters are out of range
-        If gb_image is not provided for 'Med' methods
-        
-    Examples
-    --------
-    >>> # Green level method
-    >>> bs_img = cv2.imread('black_sphere_ROI/frame_001.png')
-    >>> edgels = preprocess_image(bs_img, method='GL76')
-    >>> print(edgels.shape)  # (n_edges, 2)
-    
-    >>> # Median method (requires green background)
-    >>> gb_img = cv2.imread('green_back_ROI/frame_001.png')
-    >>> edgels = preprocess_image(bs_img, gb_img, method='Med9')
-    
-    >>> # Get edge image instead of coordinates
-    >>> edge_img = preprocess_image(bs_img, method='GL80', return_edgels=False)
-    >>> plt.imshow(edge_img, cmap='gray')
-    
-    Notes
-    -----
-    Available methods:
-    - Green Level: GL70, GL72, GL74, GL76, GL78, GL80, GL82, GL84, GL86
-    - Median: Med3, Med5, Med7, Med9, Med11, Med13, Med15, Med17, Med19
-    
-    The green level controls selectivity:
-    - Lower values (GL70): More permissive, captures more green
-    - Higher values (GL86): More selective, only bright saturated green
-    
-    The median size controls smoothing:
-    - Small sizes (Med3): Less smoothing, preserves detail
-    - Large sizes (Med19): More smoothing, removes noise
+    data : numpy.ndarray
+        If hough=True: binary edge image (0-1 values)
+        If hough=False: edge point coordinates, shape (N, 2)
+    GreenMask : numpy.ndarray
+        Binary mask
     """
-    # Load images if paths provided
-    if isinstance(bs_image, str):
-        bs_image = cv2.imread(bs_image)
-        if bs_image is None:
-            raise ValueError(f"Could not load image: {bs_image}")
+    # Load images
+    bs_path = os.path.join('black_sphere_ROI', filename + '.png')
+    gb_path = os.path.join('green_back_ROI', filename + '.png')
     
-    if isinstance(gb_image, str):
-        gb_image = cv2.imread(gb_image)
-        if gb_image is None:
-            raise ValueError(f"Could not load image: {gb_image}")
+    BS_crop = cv2.imread(bs_path)
+    G_crop = cv2.imread(gb_path)
     
-    # Parse method string
-    if method.startswith('GL'):
-        # Green Level method
-        try:
-            green_level = int(method[2:])
-        except ValueError:
-            raise ValueError(f"Invalid green level in method '{method}'. "
-                           "Expected format: 'GL70', 'GL72', ..., 'GL86'")
-        
-        if green_level < 70 or green_level > 88 or green_level % 2 != 0:
-            raise ValueError(f"Green level must be even and in range [70, 86], got {green_level}")
-        
-        edge_image = _preprocess_green_level(bs_image, green_level)
+    if BS_crop is None:
+        raise FileNotFoundError(f"Image not found: {bs_path}")
     
-    elif method.startswith('Med'):
-        # Median method
-        try:
-            median_size = int(method[3:])
-        except ValueError:
-            raise ValueError(f"Invalid median size in method '{method}'. "
-                           "Expected format: 'Med3', 'Med5', ..., 'Med19'")
-        
-        if median_size < 3 or median_size > 19 or median_size % 2 != 1:
-            raise ValueError(f"Median size must be odd and in range [3, 19], got {median_size}")
-        
-        if gb_image is None:
-            raise ValueError("Green background image required for median methods")
-        
-        edge_image = _preprocess_median(bs_image, gb_image, median_size)
-    
+    # Preprocess based on method
+    if method == 'green_level':
+        GreenMask, GreenCanny, edgels = preprocess_green_level(BS_crop, param)
+    elif method == 'median_filter':
+        GreenMask, GreenCanny, edgels = preprocess_median_filter(BS_crop, G_crop, param)
     else:
-        raise ValueError(f"Unknown method '{method}'. Must start with 'GL' or 'Med'")
+        raise ValueError(f"Unknown method: {method}")
     
-    # Return based on flag
-    if return_edgels:
-        return frames_to_edgepoints(edge_image)
+    # Return appropriate format
+    if hough:
+        return GreenMask  # HOUGH uses this directly
     else:
-        return edge_image
-
-
-# Convenience functions for batch processing
-def get_all_method_names():
-    """
-    Get list of all available preprocessing method names.
-    
-    Returns
-    -------
-    list of str
-        All method names in order: GL methods first, then Med methods
-    """
-    green_level_range = range(70, 88, 2)
-    median_range = range(3, 20, 2)
-    
-    gl_names = [f'GL{i}' for i in green_level_range]
-    med_names = [f'Med{i}' for i in median_range]
-    
-    return gl_names + med_names
+        return edgels  # CIBICA uses this
 
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) >= 3:
-        # Command line usage
-        bs_path = sys.argv[1]
-        method = sys.argv[2]
-        gb_path = sys.argv[3] if len(sys.argv) > 3 else None
-        
-        edgels = preprocess_image(bs_path, gb_path, method=method)
-        
-        if edgels is False:
-            print(f"No edges detected with method {method}")
-        else:
-            print(f"Detected {len(edgels)} edge points")
-            print(f"Edgels shape: {edgels.shape}")
-            
-            # Save to CSV
-            output_file = f'edgels_{method}.csv'
-            np.savetxt(output_file, edgels, delimiter=',', fmt='%d')
-            print(f"Saved to {output_file}")
-    
-    else:
-        # Demo usage
-        print("Preprocessing Demo")
-        print("=" * 60)
-        print("\nAvailable methods:")
-        methods = get_all_method_names()
-        print(f"  Green Level: {methods[:9]}")
-        print(f"  Median: {methods[9:]}")
-        
-        print("\nUsage:")
-        print("  python preprocessing.py <bs_image> <method> [gb_image]")
-        print("\nExamples:")
-        print("  python preprocessing.py black_sphere_ROI/img.png GL76")
-        print("  python preprocessing.py black_sphere_ROI/img.png Med9 green_back_ROI/img.png")
-        
-        print("\nProgrammatic usage:")
-        print("  from preprocessing import preprocess_image")
-        print("  edgels = preprocess_image(bs_img, method='GL80')")
-        print("  edgels = preprocess_image(bs_img, gb_img, method='Med11')")
+    """Test preprocessing functions"""
+    print("Preprocessing configurations:")
+    configs = get_preprocessing_configs()
+    for i, config in enumerate(configs):
+        print(f"{i+1:2d}. {config['name']}")
+    print(f"\nTotal: {len(configs)} configurations")
