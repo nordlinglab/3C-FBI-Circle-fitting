@@ -1,4 +1,4 @@
-# CIBICA: Circle Detection Method
+# CIBICA: Circle Identification in Blurry Images using Combinatorial Approach
 
 Implementation of CIBICA (Circle Inspection using Ballot Inspection with Combinations Analysis) for robust circle detection, compared against Hough Transform.
 
@@ -199,6 +199,8 @@ print(f"HOUGH:  ({x_h:.2f}, {y_h:.2f}), r={r_h:.2f}")
 # Ground truth
 print(f"Truth:  ({true_x:.2f}, {true_y:.2f}), r={true_r:.2f}")
 ```
+
+# 3C-FBI: Combinatorial Convolutions for Circle Fitting in Blurry Images
 
 ## License
 
