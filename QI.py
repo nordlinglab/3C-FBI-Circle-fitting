@@ -114,7 +114,7 @@ def _update_weights(residuals, k0=1.5, k1=2.5):
         
         # Moderate residuals: smooth downweighting
         if k0 <= avi <= k1:
-            weights[i] = (k0 / avi) * ((k1 - k0) / (k1 - avi))**2
+            weights[i] = (k0 / avi) * ((k1 - k0) / (k1 - avi))**-2
         
         # Large residuals: complete rejection
         elif avi > k1:
