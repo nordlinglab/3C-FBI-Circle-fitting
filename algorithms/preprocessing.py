@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 import os
+from pathlib import Path
+
+DATA_DIR = Path(__file__).parent.parent / 'data'
 
 def auto_canny(image, sigma=0.33):
     """
@@ -186,11 +189,11 @@ def preprocess_image(filename, method='green_level', param=76, hough=False):
         Binary mask
     """
     # Load images
-    bs_path = os.path.join('black_sphere_ROI', filename + '.png')
-    gb_path = os.path.join('green_back_ROI', filename + '.png')
+    bs_path = DATA_DIR / 'black_sphere_ROI' / (filename + '.png')
+    gb_path = DATA_DIR / 'green_back_ROI' / (filename + '.png')
     
-    BS_crop = cv2.imread(bs_path)
-    G_crop = cv2.imread(gb_path)
+    BS_crop = cv2.imread(str(bs_path))
+    G_crop = cv2.imread(str(gb_path))
     
     if BS_crop is None:
         raise FileNotFoundError(f"Image not found: {bs_path}")

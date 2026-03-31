@@ -21,9 +21,8 @@ import random
 import math as m
 from scipy.spatial.distance import cdist
 
-from CIBICA import CIBICA, vectorized_XYR, median_3d, LS_circle
-from HOUGH import HOUGH
-from preprocessing import *
+from algorithms import CIBICA, vectorized_XYR, median_3d, LS_circle, HOUGH
+from algorithms.preprocessing import *
 
 
 def jaccard_circles(x1, y1, r1, x2, y2, r2, show=False):
@@ -258,8 +257,8 @@ def plot_results(results, output_path='Figure_Comparison.png'):
     ax.legend(fontsize=pltFontSize)
     
     plt.tight_layout()
-    plt.savefig('Figure_Distance_Comparison.png', dpi=300, bbox_inches='tight')
-    print("Saved: Figure_Distance_Comparison.png")
+    plt.savefig('results/figures/Figure_Distance_Comparison.png', dpi=300, bbox_inches='tight')
+    print("Saved: results/figures/Figure_Distance_Comparison.png")
     plt.close()
     
     # ===== Plot 2: Distance Ratio =====
@@ -283,8 +282,8 @@ def plot_results(results, output_path='Figure_Comparison.png'):
     ax.legend(fontsize=pltFontSize)
     
     plt.tight_layout()
-    plt.savefig('Figure_Distance_Ratio.png', dpi=300, bbox_inches='tight')
-    print("Saved: Figure_Distance_Ratio.png")
+    plt.savefig('results/figures/Figure_Distance_Ratio.png', dpi=300, bbox_inches='tight')
+    print("Saved: results/figures/Figure_Distance_Ratio.png")
     plt.close()
 
 
@@ -300,7 +299,7 @@ def run_experiments_with_real_data():
         Dictionary containing Jaccard indices for both methods
     """
     # Load ground truth
-    ground_truth = pd.read_csv('Ground_Truth.csv')
+    ground_truth = pd.read_csv('data/Ground_Truth.csv')
     filenames = ground_truth['Filename'].tolist()
     
     # Define all preprocessing parameters
@@ -332,7 +331,7 @@ def run_experiments_with_real_data():
         
         # Load image to get dimensions
         import cv2
-        img_path = f'black_sphere_ROI/{filename}.png'
+        img_path = f'data/black_sphere_ROI/{filename}.png'
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Could not load {img_path}")

@@ -15,17 +15,11 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import all algorithms with CORRECT names from uploaded files
-from CCC_FBI import ccc_fbi  # FBI/3C-FBI algorithm
-from RFCA import rfca
-from GUO import guo_2019
-from GRECO import greco_2022
-from QI import qi_2024
-from RHT import rht
-from RCD import rcd
-from NURUNNABI import nurunnabi
-from CIBICA import cibica
-from preprocessing import preprocess_image
+# Import all algorithms from the algorithms package
+from algorithms import (
+    ccc_fbi, rfca, guo_2019, greco_2022, qi_2024,
+    rht, rcd, nurunnabi, cibica, preprocess_image
+)
 
 # Set style
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -184,8 +178,8 @@ def run_comprehensive_comparison():
     print("\n")
     
     df_results = pd.DataFrame(results)
-    df_results.to_csv('fbi_vs_all_results.csv', index=False)
-    print("Results saved to fbi_vs_all_results.csv")
+    df_results.to_csv('results/fbi_vs_all_results.csv', index=False)
+    print("Results saved to results/fbi_vs_all_results.csv")
     
     return df_results
 
@@ -381,8 +375,8 @@ def generate_comprehensive_visualizations(df_results):
     ax8.set_title('Statistical Summary', fontweight='bold', pad=20)
     
     plt.tight_layout()
-    plt.savefig('fbi_vs_all_comparison.png', dpi=300, bbox_inches='tight')
-    print("Plots saved to fbi_vs_all_comparison.png")
+    plt.savefig('results/figures/fbi_vs_all_comparison.png', dpi=300, bbox_inches='tight')
+    print("Plots saved to results/figures/fbi_vs_all_comparison.png")
     
     plt.show()
 
@@ -447,6 +441,6 @@ if __name__ == "__main__":
     
     print("\n" + "=" * 80)
     print("Comparison complete!")
-    print("Results saved to: fbi_vs_all_results.csv")
-    print("Plots saved to: fbi_vs_all_comparison.png")
+    print("Results saved to: results/fbi_vs_all_results.csv")
+    print("Plots saved to: results/figures/fbi_vs_all_comparison.png")
     print("=" * 80)

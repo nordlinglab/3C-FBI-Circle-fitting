@@ -36,18 +36,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from CCC_FBI import ccc_fbi
-from CIBICA import CIBICA
-from HOUGH import HOUGH
-from preprocessing import (get_preprocessing_configs, preprocess_green_level,
-                            preprocess_median_filter)
-from RCD import rcd
-from RHT import rht
-from QI import qi_2024
-from RFCA import rfca
-from GUO import guo_2019
-from GRECO import greco_2022
-from NURUNNABI import nurunnabi
+from algorithms import (
+    ccc_fbi, CIBICA, HOUGH, rcd, rht, qi_2024,
+    rfca, guo_2019, greco_2022, nurunnabi,
+    get_preprocessing_configs, preprocess_green_level, preprocess_median_filter
+)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +110,7 @@ def run_experiments_with_real_data():
     Note: HOUGH receives GreenCanny (edge image after auto-Canny) to match
     the convention in Analysis2025.ipynb (Cell 56), not the raw GreenMask.
     """
-    ground_truth = pd.read_csv('Ground_Truth.csv')
+    ground_truth = pd.read_csv('data/Ground_Truth.csv')
     filenames = ground_truth['Filename'].tolist()
     configs = get_preprocessing_configs()
 
@@ -148,8 +141,8 @@ def run_experiments_with_real_data():
         RGT = ground_truth.iloc[i]['R']
 
         # Load images once per frame
-        bs_path = os.path.join('black_sphere_ROI', filename + '.png')
-        gb_path = os.path.join('green_back_ROI',   filename + '.png')
+        bs_path = os.path.join('data', 'black_sphere_ROI', filename + '.png')
+        gb_path = os.path.join('data', 'green_back_ROI',   filename + '.png')
         BS_crop = cv2.imread(bs_path)
         G_crop  = cv2.imread(gb_path)
 
@@ -528,18 +521,18 @@ def main():
 
     # Save raw per-method CSVs
     print("Saving raw Jaccard CSVs...")
-    save_raw_jaccard_csvs(results)
+    save_raw_jaccard_csvs(results, output_dir='results/jaccard')
     print()
 
     # Save summary CSV (companion for line plot)
     print("Saving summary CSV...")
-    save_summary_csv(results)
+    save_summary_csv(results, output_dir='results/figures')
     print()
 
     # Generate figures
     print("Generating figures...")
-    plot_mean_jaccard(results)
-    plot_best_config_boxplot(results)
+    plot_mean_jaccard(results, output_dir='results/figures')
+    plot_best_config_boxplot(results, output_dir='results/figures')
     print()
 
     # Console summary

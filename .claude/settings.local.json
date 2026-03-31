@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(ls /Users/erc/Documents/3C-FBI-Circle-fitting/*.csv)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git mv:*)",
+      "Bash(python:*)"
     ]
   }
 }
