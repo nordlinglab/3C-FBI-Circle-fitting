@@ -91,15 +91,12 @@ def _calculate_signed_distances(points, center, radius):
 def guo_2019(edgels, max_iterations=10, threshold=3):
     """
     Fit a circle to edge points using Guo 2019 robust method.
-    
-    This algorithm iteratively:
-    1. Fits a circle using Taubin's algebraic method
-    2. Identifies outliers using Median Absolute Deviation (MAD)
-    3. Removes outliers and repeats until convergence
-    
-    The MAD-based outlier detection is more robust than standard deviation
-    and works well even with 50% outliers.
-    
+
+    Iteratively fits a circle using Taubin's algebraic method and removes
+    outliers detected via Median Absolute Deviation (MAD) until convergence.
+
+    Reference: Guo et al. (2019)
+
     Parameters
     ----------
     edgels : numpy.ndarray
@@ -109,70 +106,36 @@ def guo_2019(edgels, max_iterations=10, threshold=3):
     threshold : float, optional
         MAD threshold multiplier for outlier detection (default: 3)
         Points with |distance - median| > threshold * MAD are outliers
-        
+
     Returns
     -------
     center : numpy.ndarray
         Array [cx, cy] of circle center coordinates
     radius : float
         Circle radius
-        
+
     Notes
     -----
-    The algorithm stops early if no outliers are detected in an iteration.
-    
     The MAD (Median Absolute Deviation) is computed as:
         MAD = median(|distances - median(distances)|) / 0.6745
-    The factor 0.6745 makes MAD comparable to standard deviation for normal distributions.
-    
-    Typical threshold values:
-    - threshold=2.5: More aggressive outlier removal
-    - threshold=3.0: Balanced (default, ~99.7% confidence for normal data)
-    - threshold=3.5: More conservative
-    
-    Examples
-    --------
-    >>> # Circle with outliers
-    >>> theta = np.linspace(0, 2*np.pi, 50)
-    >>> circle_points = np.column_stack([20*np.cos(theta), 20*np.sin(theta)])
-    >>> outliers = np.random.rand(10, 2) * 50
-    >>> edgels = np.vstack([circle_points, outliers])
-    >>> center, radius = guo_2019(edgels)
-    >>> print(f"Center: {center}, Radius: {radius:.2f}")
+    The factor 0.6745 makes MAD comparable to standard deviation for
+    normal distributions.
     """
-    # Input validation
     if len(edgels) < 3:
         return np.array([-1, -1]), -1
-    
+
     points = np.array(edgels, dtype=float)
-    
-    for iteration in range(max_iterations):
-        # Fit circle to current inlier set
+
+    for _ in range(max_iterations):
         center, radius = _taubin_fit(points)
-        
-        # Calculate signed distances from points to fitted circle
         distances = _calculate_signed_distances(points, center, radius)
-        
-        # Compute robust statistics using MAD
         median_distance = np.median(distances)
         mad = np.median(np.abs(distances - median_distance)) / 0.6745
-        
-        # Identify outliers: points far from median distance
         outliers = np.abs(distances - median_distance) >= threshold * mad
-        
-        # Stop if no outliers found
         if not np.any(outliers):
             break
-        
-        # Remove outliers for next iteration
         points = points[~outliers]
-        
-        # Safety check: ensure enough points remain
-        if len(points) < 3:
-            # Restore previous valid fit
-            break
-    
-    # Return final result
+
     center_array = np.array([center[0], center[1]])
     return center_array, radius
 

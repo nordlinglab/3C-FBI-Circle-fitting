@@ -4,7 +4,26 @@
       "Bash(ls /Users/erc/Documents/3C-FBI-Circle-fitting/*.csv)",
       "Bash(python3:*)",
       "Bash(git mv:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(conda run:*)",
+      "Bash(conda env:*)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c \"import cv2; print\\(cv2.__version__\\)\")",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python main_CIBICA_2026.py)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c \":*)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c \"from scipy.stats import wilcoxon; print\\(''ok''\\)\")",
+      "Bash(/Users/erc/miniconda3/envs/poseestimation/bin/python -c \"import pandas; print\\('ok'\\)\")",
+      "Read(//Users/erc/miniconda3/**)",
+      "Read(//Users/erc/anaconda3/**)",
+      "Bash(system_profiler SPHardwareDataType)",
+      "Bash(cp /Users/erc/Documents/3C-FBI-Circle-fitting/CCC_FBI_results/Ap_Fig1_Jaccard_AllConfigs_20260422.pdf /Users/erc/Documents/nordlinglab-grants-publications-2024/Figures/Roman2024_Jaccard_Comparison7Lines.pdf)",
+      "Bash(cp /Users/erc/Documents/3C-FBI-Circle-fitting/CCC_FBI_results/B2_Fig2_Heatmap_BestMethod_20260422.pdf /Users/erc/Documents/nordlinglab-grants-publications-2024/Figures/Roman2024_Jaccard_Heatmap3_mean.pdf)",
+      "Bash(cp /Users/erc/Documents/3C-FBI-Circle-fitting/CCC_FBI_results/B2_Fig3_Heatmap_NoisePanels_20260422.pdf /Users/erc/Documents/nordlinglab-grants-publications-2024/Figures/Roman2024_Jaccard_Heatmap3_mean_V2.pdf)",
+      "Bash(cp /Users/erc/Documents/3C-FBI-Circle-fitting/CCC_FBI_results/A_Fig1_Jaccard_AllConfigs_20260422.pdf /Users/erc/Documents/nordlinglab-grants-publications-2024/Figures/Roman2024_Jaccard_AllConfigs_wCIBICA.pdf)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c ' *)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python --version)"
+    ],
+    "additionalDirectories": [
+      "/Users/erc/Documents/nordlinglab-grants-publications-2024/Article_Roman2021_BlackSphere"
     ]
   }
 }

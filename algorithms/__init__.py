@@ -22,7 +22,8 @@ def __getattr__(name):
         from .CCC_FBI import ccc_fbi
         return ccc_fbi
     elif name in ('CIBICA', 'cibica', 'vectorized_XYR', 'median_3d', 'LS_circle'):
-        from . import CIBICA as mod
+        import importlib
+        mod = importlib.import_module('.CIBICA', package=__name__)
         return getattr(mod, name)
     elif name == 'greco_2022':
         from .GRECO import greco_2022

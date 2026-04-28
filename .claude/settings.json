@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -m py_compile /Users/erc/Documents/3C-FBI-Circle-fitting/main_3C_FBI.py)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c ' *)"
+    ]
+  }
+}

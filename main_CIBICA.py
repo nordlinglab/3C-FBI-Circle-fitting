@@ -1,415 +1,302 @@
 """
 Main Script for Circle Detection Comparison Study
 
-This script reproduces the results from the article comparing CIBICA and 
-Hough Transform methods for circle detection.
+Compares CIBICA and Hough Transform against RHT, RCD, and QI on real
+clinical frames × 18 preprocessing configs (9 green-level + 9 median-filter).
+
+Methods:
+  CIBICA  — deterministic ballot-inspection sampling + LS refinement
+  HOUGH   — OpenCV HoughCircles (classical CHT baseline)
+  RHT     — Randomized Hough Transform           (xu1990new)
+  RCD     — RANSAC-based circle detection         (chen2001efficient)
+  QI      — IRLS hyperaccurate fitting            (qi2024robust)
 
 Usage:
     python main_CIBICA.py
 """
 
+import math as m
+import os
+import time
+
+import cv2
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
-import seaborn as sns
-import cv2
-import os
-from itertools import combinations
-import random
-import math as m
-from scipy.spatial.distance import cdist
 
-from algorithms import CIBICA, vectorized_XYR, median_3d, LS_circle, HOUGH
-from algorithms.preprocessing import *
+from algorithms import (
+    CIBICA, HOUGH, rht, rcd, qi_2024,
+    get_preprocessing_configs, preprocess_green_level, preprocess_median_filter
+)
 
 
-def jaccard_circles(x1, y1, r1, x2, y2, r2, show=False):
+# ---------------------------------------------------------------------------
+# Jaccard index
+# ---------------------------------------------------------------------------
+
+def jaccard_circles(x1, y1, r1, x2, y2, r2):
     """
-    Calculate Jaccard Index between two circles.
-    
-    Parameters
-    ----------
-    x1, y1, r1 : float
-        Ground truth circle center and radius
-    x2, y2, r2 : float
-        Estimated circle center and radius
-    show : bool
-        Whether to print debug information
-        
-    Returns
-    -------
-    jaccard : float
-        Jaccard Index (intersection over union)
-        
-    Reference
-    ---------
-    https://diego.assencio.com/?index=8d6ca3d82151bad815f78addf9b5c1c6
+    Jaccard index (intersection over union) between two circles.
+
+    Returns 0 for non-overlapping circles, 1 for identical circles.
+    Reference: https://diego.assencio.com/?index=8d6ca3d82151bad815f78addf9b5c1c6
     """
-    d = np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
-    
+    d = np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+
     if d == 0:
-        return min((r1 / r2)**2, (r2 / r1)**2)
-    else:
-        d1 = (d**2 + r1**2 - r2**2) / (2 * d)
-        d2 = d - d1
-        R = max((r1, r2))
-        r = min((r1, r2))
-        
-        if d >= r1 + r2:
-            if show:
-                print('Case 1 - Zero intersection')
-            output = 0
-        elif d <= R - r:
-            if show:
-                print('Case 2 - Small inside big')
-            output = (r / R)**2
-        else:
-            if show:
-                print('Case 3 - Some intersection')
-            alpha1 = 2 * m.acos(d1 / r1)
-            alpha2 = 2 * m.acos(d2 / r2)
-            intersection = 0.5 * r1**2 * (alpha1 - m.sin(alpha1)) + 0.5 * r2**2 * (alpha2 - m.sin(alpha2))
-            union = m.pi * (R**2 + r**2) - intersection
-            output = intersection / union
-        
-        return output
+        return min((r1 / r2) ** 2, (r2 / r1) ** 2)
+
+    d1 = (d ** 2 + r1 ** 2 - r2 ** 2) / (2 * d)
+    d2 = d - d1
+    R = max(r1, r2)
+    r = min(r1, r2)
+
+    if d >= r1 + r2:          # no overlap
+        return 0.0
+    elif d <= R - r:           # one circle inside the other
+        return (r / R) ** 2
+    else:                      # partial overlap
+        alpha1 = 2 * m.acos(max(-1.0, min(1.0, d1 / r1)))
+        alpha2 = 2 * m.acos(max(-1.0, min(1.0, d2 / r2)))
+        intersection = (0.5 * r1 ** 2 * (alpha1 - m.sin(alpha1)) +
+                        0.5 * r2 ** 2 * (alpha2 - m.sin(alpha2)))
+        union = m.pi * (R ** 2 + r ** 2) - intersection
+        return intersection / union
 
 
-def create_synthetic_test_data(n_images=10):
-    """Create synthetic test images and ground truth"""
-    np.random.seed(42)
-    
-    ground_truth = []
-    images = []
-    
-    for i in range(n_images):
-        # Random circle parameters
-        true_x = np.random.randint(15, 35)
-        true_y = np.random.randint(15, 35)
-        true_r = np.random.randint(8, 15)
-        
-        # Create image
-        img = np.zeros((50, 50, 3), dtype=np.uint8)
-        
-        # Draw circle with noise
-        angles = np.linspace(0, 2 * np.pi, 100)
-        for angle in angles:
-            px = int(true_y + true_r * np.cos(angle) + np.random.normal(0, 0.5))
-            py = int(true_x + true_r * np.sin(angle) + np.random.normal(0, 0.5))
-            if 0 <= px < 50 and 0 <= py < 50:
-                cv2.circle(img, (px, py), 1, (0, 255, 0), -1)
-        
-        images.append(img)
-        ground_truth.append({'X': true_x, 'Y': true_y, 'R': true_r})
-    
-    return images, pd.DataFrame(ground_truth)
+# ---------------------------------------------------------------------------
+# Experiment runner
+# ---------------------------------------------------------------------------
 
+METHODS = ['CIBICA', 'HOUGH', 'RHT', 'RCD', 'QI']
 
-def run_experiments(images, ground_truth):
-    """
-    Run experiments following the notebook's approach.
-    
-    Parameters
-    ----------
-    images : list
-        List of test images
-    ground_truth : pandas.DataFrame
-        Ground truth circle parameters
-        
-    Returns
-    -------
-    results : dict
-        Dictionary containing Jaccard indices for both methods
-    """
-    configs = get_preprocessing_configs()
-    N_of_files = len(images)
-    N_of_methods = len(configs)
-    
-    # Initialize result arrays (following notebook structure)
-    Jaccard_Hough = np.zeros((N_of_files, N_of_methods))
-    Jaccard_CIBICA = np.zeros((N_of_files, N_of_methods))
-    Jaccard_CIBICA_LSC = np.zeros((N_of_files, N_of_methods))
-    
-    X_ground_truth = ground_truth['X'].to_numpy()
-    Y_ground_truth = ground_truth['Y'].to_numpy()
-    R_ground_truth = ground_truth['R'].to_numpy()
-    
-    print(f"Running experiments: {N_of_files} images x {N_of_methods} methods")
-    print("=" * 70)
-    
-    # Process each image
-    for i, img in enumerate(images):
-        XGT = X_ground_truth[i]
-        YGT = Y_ground_truth[i]
-        RGT = R_ground_truth[i]
-        
-        # Get dimensions
-        xmax = img.shape[1]
-        ymax = img.shape[0]
-        
-        # Process each preprocessing method
-        for j, config in enumerate(configs):
-            # Preprocess
-            if config['method'] == 'green_level':
-                GreenMask, GreenCanny, coord = preprocess_green_level(
-                    img, config['green_level']
-                )
-            else:
-                # For median filter, use same image as reference
-                GreenMask, GreenCanny, coord = preprocess_green_level(
-                    img, 76  # Use default green level
-                )
-            
-            # HOUGH method
-            try:
-                Hough = cv2.HoughCircles(
-                    GreenMask, cv2.HOUGH_GRADIENT, 1, 300,
-                    param1=50, param2=8, minRadius=5, maxRadius=25
-                )
-                
-                if Hough is not None:
-                    Hough = np.uint16(np.around(Hough))
-                    HoughVal = Hough[0, 0, :]
-                    x2, y2, r2 = HoughVal[0], HoughVal[1], HoughVal[2]
-                    Jaccard_Hough[i, j] = jaccard_circles(XGT, YGT, RGT, x2, y2, r2)
-            except:
-                pass
-            
-            # CIBICA method
-            if len(coord) >= 3:
-                try:
-                    # Sample triplets
-                    Nmax = 500
-                    combi = list(combinations(np.arange(len(coord)), 3))
-                    N = min(Nmax, len(combi))
-                    RandomSample = np.array(random.sample(combi, N))
-                    
-                    p1 = coord[RandomSample[:, 0]]
-                    p2 = coord[RandomSample[:, 1]]
-                    p3 = coord[RandomSample[:, 2]]
-                    
-                    # Fit circles
-                    cx, cy, radius = vectorized_XYR(p1, p2, p3, xmax, ymax)
-                    
-                    # Median estimate (without refinement)
-                    XYR = median_3d(cx, cy, radius, xmax, ymax)
-                    Jaccard_CIBICA[i, j] = jaccard_circles(XGT, YGT, RGT, XYR[1], XYR[0], XYR[2])
-                    
-                    # Least squares refinement
-                    coord2 = [(XYR[0], XYR[1])]
-                    distances = cdist(coord2, coord)
-                    near = np.where(np.abs(cdist(coord2, coord) - XYR[2]) < 1.5)
-                    circle_points = coord[near[1]]
-                    
-                    if len(circle_points) >= 3:
-                        xl, yl, rl, res = np.round(LS_circle(circle_points[:, 0], circle_points[:, 1]), 3)
-                        Jaccard_CIBICA_LSC[i, j] = jaccard_circles(XGT, YGT, RGT, yl, xl, rl)
-                except:
-                    pass
-        
-        if (i + 1) % 2 == 0:
-            print(f"Processed {i + 1}/{N_of_files} images...")
-    
-    return {
-        'Jaccard_Hough': Jaccard_Hough,
-        'Jaccard_CIBICA': Jaccard_CIBICA,
-        'Jaccard_CIBICA_LSC': Jaccard_CIBICA_LSC,
-        'config_names': [c['name'] for c in configs]
-    }
-
-
-def plot_results(results, output_path='Figure_Comparison.png'):
-    """Generate comparison plots"""
-    config_names = results['config_names']
-    
-    # Calculate Jaccard Distance (1 - Jaccard Index)
-    hough_distance = 1 - np.mean(results['Jaccard_Hough'], 0)
-    cibica_distance = 1 - np.mean(results['Jaccard_CIBICA'], 0)
-    
-    method_indices = np.arange(len(config_names))
-    figureSize = (15, 6)
-    pltFontSize = 12
-    
-    # ===== Plot 1: Jaccard Distance Comparison with Fill =====
-    fig, ax = plt.subplots(figsize=figureSize)
-    
-    # Plot lines
-    ax.plot(method_indices, cibica_distance, color="green", linewidth=2.5, label="CIBICA")
-    ax.plot(method_indices, hough_distance, color="red", linewidth=2.5, label="Hough")
-    
-    # Fill areas
-    ax.fill_between(method_indices, cibica_distance, hough_distance, 
-                     where=(cibica_distance < hough_distance), 
-                     interpolate=True, color="green", alpha=0.25, label="CIBICA better")
-    ax.fill_between(method_indices, cibica_distance, hough_distance, 
-                     where=(cibica_distance >= hough_distance), 
-                     interpolate=True, color="red", alpha=0.25, label="Hough better")
-    
-    ax.set_xlabel('Preprocessing Method', fontsize=pltFontSize, fontweight='bold')
-    ax.set_ylabel('Jaccard Distance', fontsize=pltFontSize, fontweight='bold')
-    ax.set_title('Jaccard Distance Comparison: Hough vs CIBICA', 
-                 fontsize=pltFontSize + 2, fontweight='bold')
-    ax.set_xticks(method_indices)
-    ax.set_xticklabels(config_names, rotation=45, ha='right', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=pltFontSize)
-    
-    plt.tight_layout()
-    plt.savefig('results/figures/Figure_Distance_Comparison.png', dpi=300, bbox_inches='tight')
-    print("Saved: results/figures/Figure_Distance_Comparison.png")
-    plt.close()
-    
-    # ===== Plot 2: Distance Ratio =====
-    fig, ax = plt.subplots(figsize=figureSize)
-    
-    # Calculate ratio (avoid division by zero)
-    ratio = np.divide(hough_distance, cibica_distance, 
-                      out=np.ones_like(hough_distance), 
-                      where=cibica_distance!=0)
-    
-    ax.plot(method_indices, ratio, color="blue", linewidth=3)
-    ax.axhline(y=1.0, color='black', linestyle='--', alpha=0.5, label='Equal performance')
-    
-    ax.set_xlabel('Preprocessing Method', fontsize=pltFontSize, fontweight='bold')
-    ax.set_ylabel('Distance Ratio', fontsize=pltFontSize, fontweight='bold')
-    ax.set_title('Jaccard Distance Ratio: Hough/CIBICA', 
-                 fontsize=pltFontSize + 2, fontweight='bold')
-    ax.set_xticks(method_indices)
-    ax.set_xticklabels(config_names, rotation=45, ha='right', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=pltFontSize)
-    
-    plt.tight_layout()
-    plt.savefig('results/figures/Figure_Distance_Ratio.png', dpi=300, bbox_inches='tight')
-    print("Saved: results/figures/Figure_Distance_Ratio.png")
-    plt.close()
-
-
+COLORS = {
+    'CIBICA': '#2ca02c',   # green
+    'HOUGH':  '#d62728',   # red
+    'RHT':    '#1f77b4',   # blue
+    'RCD':    '#ff7f0e',   # orange
+    'QI':     '#9467bd',   # purple
+}
 
 
 def run_experiments_with_real_data():
     """
-    Run experiments using actual images from ROI folders.
-    
-    Returns
-    -------
-    results : dict
-        Dictionary containing Jaccard indices for both methods
+    Run all five detection methods on real frames × 18 preprocessing configs.
+
+    Preprocessing configs (from get_preprocessing_configs()):
+      - 9 green-level thresholds: GL70, GL72, ..., GL86
+      - 9 median-filter sizes:    Med3, Med5, ..., Med19
+
+    Coordinate convention:
+      - GT: X = col (horizontal), Y = row (vertical)
+      - CIBICA returns (col, row) → compare as jaccard_circles(XGT, YGT, ...)
+      - HOUGH (OpenCV) returns (col, row) → compare as jaccard_circles(XGT, YGT, ...)
+      - RHT, RCD, QI return (row, col) → compare as jaccard_circles(YGT, XGT, ...)
     """
-    # Load ground truth
     ground_truth = pd.read_csv('data/Ground_Truth.csv')
     filenames = ground_truth['Filename'].tolist()
-    
-    # Define all preprocessing parameters
-    green_levels = list(range(70, 88, 2))  # [70, 72, 74, 76, 78, 80, 82, 84, 86]
-    median_sizes = list(range(3, 21, 2))   # [3, 5, 7, 9, 11, 13, 15, 17, 19]
-    
-    # Combine into configs
-    configs = []
-    for level in green_levels:
-        configs.append({'name': f'Green level {level}', 'method': 'green_level', 'param': level})
-    for size in median_sizes:
-        configs.append({'name': f'Median {size}x{size}', 'method': 'median_filter', 'param': size})
-    
+    configs = get_preprocessing_configs()
+
     n_images = len(filenames)
     n_configs = len(configs)
-    
-    # Initialize results
-    Jaccard_Hough = np.zeros((n_images, n_configs))
+
     Jaccard_CIBICA = np.zeros((n_images, n_configs))
-    
-    print(f"Processing {n_images} images x {n_configs} configs...")
+    Jaccard_HOUGH  = np.zeros((n_images, n_configs))
+    Jaccard_RHT    = np.zeros((n_images, n_configs))
+    Jaccard_RCD    = np.zeros((n_images, n_configs))
+    Jaccard_QI     = np.zeros((n_images, n_configs))
+
+    print(f"Processing {n_images} images × {n_configs} preprocessing configs")
+    print(f"Methods: {', '.join(METHODS)}")
     print("=" * 70)
-    
-    # Process each image
+
+    t_start = time.time()
+
     for i, filename in enumerate(filenames):
         XGT = ground_truth.iloc[i]['X']
         YGT = ground_truth.iloc[i]['Y']
         RGT = ground_truth.iloc[i]['R']
-        
-        # Load image to get dimensions
-        import cv2
-        img_path = f'data/black_sphere_ROI/{filename}.png'
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Warning: Could not load {img_path}")
+
+        bs_path = os.path.join('data', 'black_sphere_ROI', filename + '.png')
+        gb_path = os.path.join('data', 'green_back_ROI',   filename + '.png')
+        BS_crop = cv2.imread(bs_path)
+        G_crop  = cv2.imread(gb_path)
+
+        if BS_crop is None:
+            print(f"  Warning: could not load {bs_path} — skipping")
             continue
-            
-        xmax, ymax = img.shape[1], img.shape[0]
-        
-        # Test each preprocessing config
-        for j, config in enumerate(configs):
+
+        xmax = BS_crop.shape[1]
+        ymax = BS_crop.shape[0]
+
+        for j, cfg in enumerate(configs):
             try:
-                # CIBICA - get edgels
-                edgels = preprocess_image(
-                    filename, 
-                    method=config['method'],
-                    param=config['param'],
-                    hough=False
-                )
-                
+                # ---- Preprocessing ----------------------------------------
+                if cfg['green_level'] is not None:
+                    _, GreenCanny, edgels = preprocess_green_level(
+                        BS_crop, cfg['green_level'])
+                else:
+                    _, GreenCanny, edgels = preprocess_median_filter(
+                        BS_crop, G_crop, cfg['median_size'])
+
+                # ---- CIBICA -----------------------------------------------
                 if len(edgels) >= 3:
-                    x_c, y_c, r_c = CIBICA(edgels, n_triplets=500, xmax=xmax, ymax=ymax)
-                    if not np.isnan(x_c):
-                        Jaccard_CIBICA[i, j] = jaccard_circles(XGT, YGT, RGT, x_c, y_c, r_c)
-                
-                # HOUGH - get mask
-                mask = preprocess_image(
-                    filename,
-                    method=config['method'],
-                    param=config['param'],
-                    hough=True
-                )
-                
-                x_h, y_h, r_h = HOUGH(mask, minDist=300, param2=8, minRadius=5, maxRadius=25)
+                    x_c, y_c, r_c = CIBICA(edgels, n_triplets=500,
+                                            xmax=xmax, ymax=ymax)
+                    if not (np.isnan(x_c) or r_c <= 0):
+                        Jaccard_CIBICA[i, j] = jaccard_circles(
+                            XGT, YGT, RGT, x_c, y_c, r_c)
+
+                # ---- HOUGH ------------------------------------------------
+                x_h, y_h, r_h = HOUGH(GreenCanny, minDist=300, param2=8,
+                                       minRadius=5, maxRadius=20)
                 if x_h > 0:
-                    Jaccard_Hough[i, j] = jaccard_circles(XGT, YGT, RGT, x_h, y_h, r_h)
-                    
+                    Jaccard_HOUGH[i, j] = jaccard_circles(
+                        XGT, YGT, RGT, x_h, y_h, r_h)
+
+                # ---- RHT --------------------------------------------------
+                if len(edgels) >= 3:
+                    center_rht, r_rht = rht(edgels, num_iterations=1000,
+                                            threshold=3)
+                    if r_rht > 0:
+                        Jaccard_RHT[i, j] = jaccard_circles(
+                            YGT, XGT, RGT,
+                            center_rht[0], center_rht[1], r_rht)
+
+                # ---- RCD --------------------------------------------------
+                if len(edgels) >= 4:
+                    center_rcd, r_rcd = rcd(edgels, num_iterations=1000,
+                                            distance_threshold=2,
+                                            min_inliers=5,
+                                            min_distance=5)
+                    if r_rcd > 0:
+                        Jaccard_RCD[i, j] = jaccard_circles(
+                            YGT, XGT, RGT,
+                            center_rcd[0], center_rcd[1], r_rcd)
+
+                # ---- QI ---------------------------------------------------
+                if len(edgels) >= 3:
+                    try:
+                        center_qi, r_qi = qi_2024(edgels)
+                        if r_qi > 0:
+                            Jaccard_QI[i, j] = jaccard_circles(
+                                YGT, XGT, RGT,
+                                center_qi[0], center_qi[1], r_qi)
+                    except Exception:
+                        pass  # qi_2024 raises ValueError on degenerate input
+
             except Exception as e:
-                print(f"Error on {filename}, config {config['name']}: {e}")
-        
-        if (i + 1) % 10 == 0:
-            print(f"Processed {i+1}/{n_images} images...")
-    
-    return {
-        'Jaccard_Hough': Jaccard_Hough,
-        'Jaccard_CIBICA': Jaccard_CIBICA,
-        'config_names': [c['name'] for c in configs]
-    }
-def main():
-    """Main function"""
+                print(f"  Error — image {filename}, config {cfg['name']}: {e}")
+
+        if (i + 1) % 20 == 0 or (i + 1) == n_images:
+            elapsed = time.time() - t_start
+            print(f"  Processed {i + 1}/{n_images} images  "
+                  f"({elapsed:.1f}s elapsed)")
+
     print("=" * 70)
-    print("Circle Detection Comparison: CIBICA vs Hough Transform")
+    print(f"Done in {time.time() - t_start:.1f}s")
+
+    return {
+        'Jaccard_CIBICA': Jaccard_CIBICA,
+        'Jaccard_HOUGH':  Jaccard_HOUGH,
+        'Jaccard_RHT':    Jaccard_RHT,
+        'Jaccard_RCD':    Jaccard_RCD,
+        'Jaccard_QI':     Jaccard_QI,
+        'config_names':   [c['name'] for c in configs],
+        'filenames':      filenames,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_results(results, output_dir='results/figures'):
+    """Line plot of mean Jaccard index per preprocessing config for all methods."""
+    config_names = results['config_names']
+    x = np.arange(len(config_names))
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+
+    for method in METHODS:
+        mean_j = np.mean(results[f'Jaccard_{method}'], axis=0)
+        ax.plot(x, mean_j, color=COLORS[method], linewidth=2,
+                marker='o', markersize=3, label=method)
+
+    ax.set_xlabel('Preprocessing Config', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Mean Jaccard Index', fontsize=12, fontweight='bold')
+    ax.set_title('Mean Jaccard Index per Preprocessing Config — All Methods',
+                 fontsize=13, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(config_names, rotation=45, ha='right', fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.axvline(x=8.5, color='gray', linestyle='--', linewidth=0.8,
+               alpha=0.6, label='GL / Med boundary')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11)
+
+    plt.tight_layout()
+    path = os.path.join(output_dir, 'Figure_Comparison.png')
+    plt.savefig(path, dpi=300, bbox_inches='tight')
+    print(f"  Saved: {path}")
+    plt.close()
+
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+def print_summary(results):
+    config_names = results['config_names']
+
+    print("\n" + "=" * 70)
+    print("Summary — Mean Jaccard Index (all images × all configs)")
+    print("=" * 70)
+    print(f"{'Method':<8}  {'Mean':>8}  {'Std':>8}  {'Best config':>14}  {'Best mean':>10}")
+    print("-" * 70)
+
+    for method in METHODS:
+        J = results[f'Jaccard_{method}']
+        per_config = np.mean(J, axis=0)
+        best_idx = int(np.argmax(per_config))
+        print(f"{method:<8}  {np.mean(J):>8.4f}  {np.std(J):>8.4f}  "
+              f"{config_names[best_idx]:>14}  {per_config[best_idx]:>10.4f}")
+
+    print("=" * 70)
+
+    # Win counts
+    all_J = np.stack([results[f'Jaccard_{m}'] for m in METHODS], axis=0)
+    best_method = np.argmax(all_J, axis=0)
+    total = best_method.size
+
+    print("\nWin counts (best Jaccard per image×config cell):")
+    print(f"  Total cells: {total}")
+    for k, method in enumerate(METHODS):
+        wins = int(np.sum(best_method == k))
+        print(f"  {method:<8}: {wins:4d} / {total}  ({100 * wins / total:.1f}%)")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    print("=" * 70)
+    print("Circle Detection Comparison: CIBICA vs HOUGH vs RHT vs RCD vs QI")
     print("=" * 70)
     print()
-    
-    # Run experiments with real data
+
     results = run_experiments_with_real_data()
     print()
-    
-    # Plot results
-    print("Generating figure...")
+
+    print("Generating figures...")
     plot_results(results)
-    
-    # Print summary
-    print("\n" + "=" * 70)
-    print("Summary")
-    print("=" * 70)
-    
-    hough_mean = np.mean(results['Jaccard_Hough'])
-    cibica_mean = np.mean(results['Jaccard_CIBICA'])
-    
-    print(f"Mean Jaccard Index (Hough):  {hough_mean:.4f}")
-    print(f"Mean Jaccard Index (CIBICA): {cibica_mean:.4f}")
-    
-    if cibica_mean > hough_mean:
-        improvement = ((cibica_mean - hough_mean) / hough_mean) * 100
-        print(f"CIBICA improvement: {improvement:.2f}%")
-    
-    print("\nDone!")
-    print("=" * 70)
+    print()
+
+    print_summary(results)
 
 
 if __name__ == "__main__":
