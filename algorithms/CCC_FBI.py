@@ -17,13 +17,19 @@ from itertools import combinations
 import random
 from numba import jit
 
-def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=5, rmax=40, minval=0):
+def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=4, rmax=30, minval=-20):
     """
     Calculate circle parameters from three points using vectorized operations.
-    
-    Fits circles to sets of three points and filters results based on geometric constraints.
-    Uses the determinant method for circle center calculation.
-    
+
+    Fits circles to sets of three points and filters results using the same
+    three criteria as CIBICA:
+      Filter 1 — Collinearity:  discard if det == 0 (exact).
+      Filter 2 — Center bounds: discard if center lies outside the symmetric
+                ±20 px rectangle [minval, xmax+20] × [minval, ymax+20]
+                (CIBICA defaults: minval = -20).
+      Filter 3 — Radius range:  discard if r < rmin or r > rmax
+                (CIBICA defaults: rmin = 4, rmax = 30 px).
+
     Parameters
     ----------
     p1, p2, p3 : numpy.ndarray
@@ -31,17 +37,17 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=5, rmax=40, minval=0):
     xmax, ymax : float, optional
         Maximum allowed x and y coordinates (default: 50)
     rmin, rmax : float, optional
-        Minimum and maximum allowed radius (default: 5, 40)
+        Minimum and maximum allowed radius (default: 4, 30 — CIBICA values)
     minval : float, optional
-        Minimum allowed coordinate value (default: 0)
-        
+        Minimum allowed coordinate value (default: -20 — CIBICA symmetric tol.)
+
     Returns
     -------
     cx, cy : numpy.ndarray
         x and y coordinates of valid circle centers
     radius : numpy.ndarray
         Radii of valid circles
-        
+
     Notes
     -----
     Returns (-1, -1), (-1, -1), (-1, -1) if no valid circles found.
@@ -53,8 +59,8 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=5, rmax=40, minval=0):
     det  = (p1[:, 0] - p2[:, 0]) * (p2[:, 1] - p3[:, 1]) - \
            (p2[:, 0] - p3[:, 0]) * (p1[:, 1] - p2[:, 1])
 
-    # Create mask for non-degenerate triangles (non-zero determinant)
-    mask = np.abs(det) > 0.001
+    # Filter 1 — Collinearity: discard if det == 0 (exact, matches CIBICA)
+    mask = det != 0
 
     if not np.any(mask):
         return np.array([-1, -1]), np.array([-1, -1]), np.array([-1, -1])
@@ -68,7 +74,8 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=5, rmax=40, minval=0):
     cy[mask] = ((p1[mask, 0] - p2[mask, 0]) * cd[mask] - 
                 (p2[mask, 0] - p3[mask, 0]) * bc[mask]) / det[mask]
 
-    # Apply boundary constraints
+    # Filter 2 — Center bounds: symmetric ±20 px around [0, xmax] × [0, ymax]
+    # (CIBICA-equivalent: discard if x < -20, y < -20, x > xmax+20, y > ymax+20)
     mask &= (cx >= minval) & (cy >= minval)
     mask &= (cx <= xmax + 20) & (cy <= ymax + 20)
 
@@ -77,10 +84,10 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50, rmin=5, rmax=40, minval=0):
 
     # Calculate radii
     radius = np.zeros_like(det)
-    radius[mask] = np.sqrt((cx[mask] - p1[mask, 0])**2 + 
+    radius[mask] = np.sqrt((cx[mask] - p1[mask, 0])**2 +
                            (cy[mask] - p1[mask, 1])**2)
 
-    # Apply radius constraints
+    # Filter 3 — Radius range: discard if r < rmin or r > rmax (CIBICA: 4–30 px)
     mask &= (radius >= rmin) & (radius <= rmax)
 
     if not np.any(mask):
@@ -228,8 +235,8 @@ def add_neighboring_points(points):
     all_points = np.array(points + neighbors)
     return all_points
 
-def ccc_fbi(edgels, Nmax=5000, xmax=50, ymax=50, rmin=1, rmax=40, 
-                   top_n=5, ConvDist=2):
+def ccc_fbi(edgels, Nmax=5000, xmax=50, ymax=50, rmin=4, rmax=30,
+                   top_n=5, ConvDist=2, minval=-20):
     """
     Fit a circle to edge points using Fast Ballot Inspection (FBI) method.
     
@@ -252,11 +259,13 @@ def ccc_fbi(edgels, Nmax=5000, xmax=50, ymax=50, rmin=1, rmax=40,
     xmax, ymax : float, optional
         Expected maximum x and y coordinates (default: 50)
     rmin, rmax : float, optional
-        Expected radius range (default: 1, 40)
+        Expected radius range (default: 4, 30 — CIBICA values)
     top_n : int, optional
         Number of top voting modes to consider (default: 5)
     ConvDist : int, optional
         Convolution kernel radius for refinement (default: 2)
+    minval : float, optional
+        Minimum allowed center coordinate (default: -20 — symmetric ±20 tol.)
         
     Returns
     -------
@@ -291,9 +300,9 @@ def ccc_fbi(edgels, Nmax=5000, xmax=50, ymax=50, rmin=1, rmax=40,
     p2 = edgels[randomSample[:,1]]
     p3 = edgels[randomSample[:,2]]
     
-    # Fit circles to all triplets
-    cx, cy, r = vectorized_XYR(p1, p2, p3, xmax=xmax, ymax=ymax, 
-                               rmin=rmin, rmax=rmax, minval=0)
+    # Fit circles to all triplets (filters 1–3 applied inside vectorized_XYR)
+    cx, cy, r = vectorized_XYR(p1, p2, p3, xmax=xmax, ymax=ymax,
+                               rmin=rmin, rmax=rmax, minval=minval)
     # Check if valid circles were found
     if len(cx) == 0 or cx[0] == -1:
         return np.array([-1, -1]), -1

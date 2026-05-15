@@ -13,20 +13,34 @@ from scipy.spatial.distance import cdist
 from scipy import stats
 
 
-def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50):
+def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50,
+                   rmin=4, rmax=30, minval=-20):
     """
     Vectorized circle fitting through triplets of points.
-    
+
     This is the core CIBICA function that fits circles through multiple
-    triplets simultaneously and filters invalid results.
-    
+    triplets simultaneously and filters invalid results using the same
+    three criteria as 3C-FBI:
+      Filter 1 — Collinearity:  discard if det == 0 (exact).
+      Filter 2 — Center bounds: discard if center lies outside the
+                rectangle [minval, xmax+20] x [minval, ymax+20].
+                Defaults: minval = -20 (symmetric ±20 px tolerance).
+      Filter 3 — Radius range:  discard if r < rmin or r > rmax.
+                Defaults: rmin = 4, rmax = 30 (px), tuned for the
+                real-world Exp A sphere radii. Override for synthetic
+                experiments (e.g. B1 r=100, B2 r=120).
+
     Parameters
     ----------
     p1, p2, p3 : numpy.ndarray
         Arrays of points, shape (N, 2) where N is number of triplets
     xmax, ymax : int
         Maximum image dimensions for filtering
-        
+    rmin, rmax : float, optional
+        Minimum and maximum allowed radius (default: 4, 30 px).
+    minval : float, optional
+        Minimum allowed center coordinate (default: -20 — symmetric tol.).
+
     Returns
     -------
     cx, cy, radius : numpy.ndarray
@@ -37,7 +51,7 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50):
     cd = (temp - p3[:, 0] * p3[:, 0] - p3[:, 1] * p3[:, 1]) / 2
     det = (p1[:, 0] - p2[:, 0]) * (p2[:, 1] - p3[:, 1]) - (p2[:, 0] - p3[:, 0]) * (p1[:, 1] - p2[:, 1])
 
-    # Remove collinear points
+    # Filter 1 — Collinearity: discard if det == 0 (exact)
     zeros = np.where(det == 0)
     p1 = np.delete(p1, zeros, 0)
     p2 = np.delete(p2, zeros, 0)
@@ -45,44 +59,45 @@ def vectorized_XYR(p1, p2, p3, xmax=50, ymax=50):
     bc = np.delete(bc, zeros, 0)
     cd = np.delete(cd, zeros, 0)
     det = np.delete(det, zeros, 0)
-    
+
     cx = (bc * (p2[:, 1] - p3[:, 1]) - cd * (p1[:, 1] - p2[:, 1])) / det
     cy = ((p1[:, 0] - p2[:, 0]) * cd - (p2[:, 0] - p3[:, 0]) * bc) / det
 
-    # Filter out-of-bounds circles
-    deletes = np.where(cx < 0 - 20)
+    # Filter 2 — Center bounds: symmetric ±20 px around [0, xmax] x [0, ymax]
+    # (controlled by `minval`; default -20)
+    deletes = np.where(cx < minval)
     cx = np.delete(cx, deletes, 0)
     cy = np.delete(cy, deletes, 0)
     p1 = np.delete(p1, deletes, 0)
-    
-    deletes = np.where(cy < 0 - 20)
+
+    deletes = np.where(cy < minval)
     cx = np.delete(cx, deletes, 0)
     cy = np.delete(cy, deletes, 0)
     p1 = np.delete(p1, deletes, 0)
-    
+
     deletes = np.where(cx > xmax + 20)
     cx = np.delete(cx, deletes, 0)
     cy = np.delete(cy, deletes, 0)
     p1 = np.delete(p1, deletes, 0)
-    
+
     deletes = np.where(cy > ymax + 20)
     cx = np.delete(cx, deletes, 0)
     cy = np.delete(cy, deletes, 0)
     p1 = np.delete(p1, deletes, 0)
 
-    # Calculate radius and filter invalid sizes
+    # Filter 3 — Radius range: discard if r < rmin or r > rmax
     radius = np.sqrt((cx - p1[:, 0])**2 + (cy - p1[:, 1])**2)
-    
-    big_radius = np.where(radius > 30)
+
+    big_radius = np.where(radius > rmax)
     radius = np.delete(radius, big_radius, 0)
     cx = np.delete(cx, big_radius, 0)
     cy = np.delete(cy, big_radius, 0)
 
-    small_radius = np.where(radius < 4)
+    small_radius = np.where(radius < rmin)
     radius = np.delete(radius, small_radius, 0)
     cx = np.delete(cx, small_radius, 0)
     cy = np.delete(cy, small_radius, 0)
-    
+
     return cx, cy, radius
 
 
@@ -146,32 +161,38 @@ def LS_circle(x, y):
     return xc, yc, r, residu
 
 
-def CIBICA(coord, n_triplets=500, xmax=50, ymax=50, refinement=True):
+def CIBICA(coord, n_triplets=500, xmax=50, ymax=50, refinement=True,
+           rmin=4, rmax=30, minval=-20):
     """
     Circle detection using CIBICA method.
-    
+
     Main function that implements the complete CIBICA algorithm:
     1. Sample random triplets of edge points
     2. Fit circles through each triplet
     3. Estimate final circle using median
     4. Optionally refine using least squares
-    
+
     Parameters
     ----------
     coord : numpy.ndarray
         Edge point coordinates, shape (N, 2) as [[row,col], [row,col], ...]
     n_triplets : int
-        Number of random triplets to sample (default: 10000)
+        Number of random triplets to sample (default: 500)
     xmax, ymax : int
         Image dimensions for filtering (default: 50, 50)
     refinement : bool
         Whether to apply least squares refinement (default: True)
-        
+    rmin, rmax : float, optional
+        Allowed radius range (default: 4, 30 px — original CIBICA values).
+        Override for synthetic experiments where r0 falls outside this range.
+    minval : float, optional
+        Lower bound on center coordinate (default: -20 — symmetric tol.).
+
     Returns
     -------
     x, y, r : float
         Circle center (x, y) and radius r
-        
+
     Examples
     --------
     >>> from preprocessing import extract_edgels
@@ -180,19 +201,20 @@ def CIBICA(coord, n_triplets=500, xmax=50, ymax=50, refinement=True):
     """
     if len(coord) < 3:
         return np.nan, np.nan, np.nan
-    
+
     # Generate combinations and sample
     combi = list(combinations(np.arange(len(coord)), 3))
     N = min(n_triplets, len(combi))
     RandomSample = np.array(random.sample(combi, N))
-    
+
     # Get triplet coordinates
     p1 = coord[RandomSample[:, 0]]
     p2 = coord[RandomSample[:, 1]]
     p3 = coord[RandomSample[:, 2]]
-    
+
     # Fit circles
-    cx, cy, radius = vectorized_XYR(p1, p2, p3, xmax, ymax)
+    cx, cy, radius = vectorized_XYR(p1, p2, p3, xmax, ymax,
+                                    rmin=rmin, rmax=rmax, minval=minval)
     
     # Get median estimate
     XYR = median_3d(cx, cy, radius, xmax, ymax)

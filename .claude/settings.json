@@ -2,7 +2,22 @@
   "permissions": {
     "allow": [
       "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -m py_compile /Users/erc/Documents/3C-FBI-Circle-fitting/main_3C_FBI.py)",
-      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c ' *)"
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c ' *)",
+      "Bash(/opt/anaconda3/envs/poseestimation/bin/python -c ' *)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c \"import ast; ast.parse\\(open\\('/Users/erc/Documents/3C-FBI-Circle-fitting/main_3C_FBI.py'\\).read\\(\\)\\); print\\('main_3C_FBI.py OK'\\)\")",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python -c \"import ast; ast.parse\\(open\\('/Users/erc/Documents/3C-FBI-Circle-fitting/regen_figures.py'\\).read\\(\\)\\); print\\('regen_figures.py OK'\\)\")",
+      "Bash(ps -p 30944 -o pid,etime,%cpu,command)",
+      "Bash(/opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python regen_figures.py --date 20260513)",
+      "Bash(grep -n \"12 \\\\\\\\\\\\\\\\times 12\\\\|480 \\\\\\\\\\\\\\\\times 480\\\\|480 \\\\\\\\$\\\\\\\\\\\\\\\\times\\\\\\\\$\\\\|nine panels\\\\|nine spatial\\\\|360 configurations\\\\|320 configurations\\\\|fig:Roman2024_Resolution2\\\\|fig:Roman2024_Jaccard_Heatmap_mean\\\\|fig:Jaccard_3C-FBI\" /Users/erc/Documents/nordlinglab-grants-publications-2024/Article_Roman2021_BlackSphere/main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(timeout 60 pdflatex -interaction=nonstopmode main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(pdfinfo main_Pattern_recognition_submission_V03_260422_wCIBICA.pdf)",
+      "Bash(grep -nE \"0\\\\.992|0\\\\.898|0\\\\.811|0\\\\.863|150[+ ]?fps|150 fps|480\\\\$?\\\\\\\\\\\\\\\\times\\\\$? ?480|480 \\\\\\\\\\\\\\\\times 480|40 \\\\\\\\\\\\\\\\times 40|160 \\\\\\\\\\\\\\\\times 160|20 \\\\\\\\\\\\\\\\times 20|12 \\\\\\\\\\\\\\\\times 12|360 config|/360|/320|320 config|0\\\\.962|288\\\\.9|587 fps|6498|nine panel|nine spatial\" main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(sed -n '88,121p' main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(sed -n '155,170p' main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(sed -n '492,565p' main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "Bash(pdflatex -interaction=nonstopmode main_Pattern_recognition_submission_V03_260422_wCIBICA.tex)",
+      "WebFetch(domain:www.sciencedirect.com)",
+      "Bash(bibtex main_Pattern_recognition_submission_V03_260422_wCIBICA)"
     ]
   }
 }

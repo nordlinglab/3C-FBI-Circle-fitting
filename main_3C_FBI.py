@@ -2,22 +2,25 @@
 main_3C_FBI.py — 3C-FBI Comprehensive Evaluation
 Publication-quality outputs for journal submission.
 
-Three experiments as described in the paper:
+The label "3C-FBI" in this script refers to the published algorithm
+(see algorithms/CCC_FBI_v3.py): hybrid full vote map + localized 3x3x3
+cube search around the top-N peaks (cube_size=3, ±1 reach).
+
+Three experiments:
   A  : Real-world Parkinson's disease data (144 frames × 18 preprocessing configs)
        Methods: CIBICA, 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi
        Reports: (i) average over ALL 18 configs, (ii) best config per method,
                 (iii) mean over GL80/GL82/GL84 (Table 1 style)
-  B1 : Synthetic semicircle with varying outliers  (following Qi et al. 2024)
-       Methods: 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi
+  B1 : Synthetic semicircle with varying outliers (following Qi et al. 2024)
+       Methods: CIBICA, 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi
   B2 : Synthetic full circle — varying noise, outliers, spatial quantization
-       Methods: 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi
+       Methods: CIBICA, 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi
 
 Output folder: CCC_FBI_results/
 
 Usage:
     cd /Users/erc/Documents/3C-FBI-Circle-fitting
-    conda activate poseestimation
-    python main_3C_FBI.py
+    /opt/homebrew/Caskroom/miniforge/base/envs/poseestimation/bin/python main_3C_FBI.py
 """
 
 import contextlib
@@ -39,8 +42,12 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-from algorithms.CCC_FBI   import ccc_fbi
-from algorithms.CIBICA    import CIBICA as cibica_fn
+# 3C-FBI = CCC_FBI v3 (published variant): hybrid full vote map + localized
+# 3x3x3 cube (cube_size=3, ±1 reach) around top-N peaks. The cube_size=3 default
+# was selected after the v1-vs-v3-c3-vs-v3-c5 ablation: cube=3 wins on B2 and
+# beats cube=5 on real data; cube=5 only edges B1 by 0.0004 J.
+from algorithms.CCC_FBI_v3 import ccc_fbi_v3
+from algorithms.CIBICA     import CIBICA as cibica_fn
 from algorithms.RHT       import rht
 from algorithms.RCD       import rcd
 from algorithms.RFCA      import rfca
@@ -97,8 +104,10 @@ METHODS_A = ['CIBICA', '3C-FBI', 'RHT', 'RCD', 'RFCA', 'Nurunnabi', 'Guo', 'Grec
 # Paper view for Experiment A — excludes CIBICA (same-author predecessor, not a competitor)
 METHODS_A_PAPER = ['3C-FBI', 'RHT', 'RCD', 'RFCA', 'Nurunnabi', 'Guo', 'Greco', 'Qi']
 
-# Methods used in Experiments B1/B2 (synthetic) — CIBICA excluded (radius filter incompatible)
-METHODS = ['3C-FBI', 'RHT', 'RCD', 'RFCA', 'Nurunnabi', 'Guo', 'Greco', 'Qi']
+# Methods used in Experiments B1/B2 (synthetic).
+# CIBICA's radius bounds are now exposed (rmin/rmax in algorithms/CIBICA.py),
+# so we can run it on synthetic radii (B1: r=100, B2: r=120).
+METHODS = ['CIBICA', '3C-FBI', 'RHT', 'RCD', 'RFCA', 'Nurunnabi', 'Guo', 'Greco', 'Qi']
 
 # Publication-quality color palette (colorblind-friendly)
 COLORS = {
@@ -272,10 +281,13 @@ def compute_focal_stats_A(res, focal='3C-FBI', methods=None):
 # Method runners
 # ============================================================================
 
-def _call_ccc_fbi(edgels, xmax, ymax, rmax=40):
-    """Suppress the internal print() in ccc_fbi."""
+def _call_ccc_fbi(edgels, xmax, ymax, rmax=40, rmin=4):
+    """Thin wrapper around the published 3C-FBI (CCC_FBI v3, cube_size=3).
+    Forwards xmax/ymax/rmin/rmax so synthetic experiments can override the
+    radius bounds (default 4-30 px, tuned for Exp A)."""
     with contextlib.redirect_stdout(io.StringIO()):
-        center, r = ccc_fbi(edgels, Nmax=5000, xmax=xmax, ymax=ymax, rmax=rmax)
+        center, r = ccc_fbi_v3(edgels, Nmax=5000, xmax=xmax, ymax=ymax,
+                               rmin=rmin, rmax=rmax, cube_size=3)
     return np.array(center, dtype=float), float(r)
 
 
@@ -310,12 +322,29 @@ def run_method_A(method, edgels, xmax, ymax):
     return center, r, elapsed
 
 
-def run_method_B(method, points, xmax, ymax, rmax=300):
+def run_method_B(method, points, xmax, ymax, rmax=300, rmin=4):
     """Run one method on a synthetic point cloud (Experiments B1/B2).
     Points in (x,y) space. Returns cx, cy, r, elapsed."""
     t0 = time.perf_counter()
     try:
-        if   method == '3C-FBI':    center, r = _call_ccc_fbi(points, xmax, ymax, rmax=rmax)
+        if method == 'CIBICA':
+            # CIBICA returns (y_axis_value, x_axis_value, r) — same swap pattern
+            # as in run_method_A. With (x, y) input we want center = (x, y),
+            # so flip the first two outputs.
+            #
+            # Inflate xmax/ymax for CIBICA: its `median_3d` encoder uses
+            # `y_out = id % ymax`, which loses the y-coordinate when the true
+            # center sits at the boundary (e.g., B1's ymax = y0). Doubling the
+            # encoder bounds gives headroom; the filter (cx > xmax+20, etc.)
+            # stays slightly looser but is harmless for synthetic data.
+            xmax_c = max(2 * xmax, 100)
+            ymax_c = max(2 * ymax, 100)
+            x_c, y_c, r = cibica_fn(points, n_triplets=500,
+                                    xmax=xmax_c, ymax=ymax_c,
+                                    rmin=rmin, rmax=rmax)
+            center = np.array([y_c, x_c], dtype=float)
+        elif method == '3C-FBI':    center, r = _call_ccc_fbi(points, xmax, ymax,
+                                                              rmax=rmax, rmin=rmin)
         elif method == 'RHT':       center, r = rht(points, num_iterations=1000, threshold=5)
         elif method == 'RCD':       center, r = rcd(points, num_iterations=1000,
                                                     distance_threshold=2,
@@ -553,6 +582,44 @@ def _save_A_view(res, methods, tag):
     ax.legend(loc='lower left', ncol=3, fontsize=9)
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, f'{tag}_Fig1_Jaccard_AllConfigs_{DATE}.png')
+    plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
+    print(f"  Saved: {path}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FIGURE 1b — Dual-panel: GL (left) | Med (right), Jaccard vs config
+    # Mirrors the V02 paper Fig 1 style: each preprocessing family in its own panel.
+    # ══════════════════════════════════════════════════════════════════════════
+    gl_idx  = [i for i, c in enumerate(cfg_names) if c.startswith('GL')]
+    med_idx = [i for i, c in enumerate(cfg_names) if c.startswith('Med')]
+    gl_names  = [cfg_names[i] for i in gl_idx]
+    med_names = [cfg_names[i] for i in med_idx]
+
+    fig, (ax_gl, ax_med) = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for ax, idx_list, names, panel_title, bg_color in [
+        (ax_gl,  gl_idx,  gl_names,  'Green-Level preprocessing',  'steelblue'),
+        (ax_med, med_idx, med_names, 'Median Filter preprocessing', 'darkorange'),
+    ]:
+        x = np.arange(len(idx_list))
+        for i, method in enumerate(methods):
+            mean_j = res['Jaccard'][kidx[i]][idx_list, :].mean(axis=1)
+            ax.plot(x, mean_j,
+                    color=COLORS[method], linewidth=2.0,
+                    marker=MARKERS[method], markersize=5,
+                    linestyle=LINESTYLES[method], label=method, zorder=3)
+        ax.axhspan(0.5, 1.02, alpha=0.03, color=bg_color)
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=45, ha='right', fontsize=9)
+        ax.set_ylim(0.5, 1.02)
+        ax.set_xlim(-0.5, len(idx_list) - 0.5)
+        ax.set_xlabel('Preprocessing Configuration')
+        ax.set_title(panel_title, fontsize=11, fontweight='bold')
+        ax.grid(axis='y', alpha=0.3)
+    ax_gl.set_ylabel('Mean Jaccard Index')
+    ax_gl.legend(loc='lower left', ncol=2, fontsize=8.5)
+    fig.suptitle(f'Experiment A — Mean Jaccard Index ({n_meth} methods, 144 frames)',
+                 fontsize=12, fontweight='bold', y=1.01)
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, f'{tag}_Fig1b_Jaccard_GL_Med_TwoPanel_{DATE}.png')
     plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
     print(f"  Saved: {path}")
 
@@ -983,6 +1050,62 @@ def run_experiment_B1():
             'R_mean': R_mean, 'T_mean': T_mean, 'outlier_range': outlier_range}
 
 
+_B1_METHOD_LABEL = {
+    'RHT':       r'RHT - Xu et al.\ \cite{xu1990new}',
+    'RCD':       r'RCD - Chen and Chung \cite{chen2001efficient}',
+    'RFCA':      r'RFCA - Ladr\'on de Guevara \cite{ladron2011robust}',
+    'Nurunnabi': r'Nurunnabi et al.\ \cite{nurunnabi2018robust}',
+    'Guo':       r'Guo and Yang \cite{guo2019iterative}',
+    'Greco':     r'Greco et al.\ \cite{greco2023impartial}',
+    'Qi':        r'Qi et al.\ \cite{qi2024robust}',
+    'CIBICA':    r'CIBICA \cite{romancibica}',
+    '3C-FBI':    r'3C-FBI',
+}
+
+
+def _export_B1_latex(J_mean, outs):
+    """Write B1 Table 2: compare at 4 decimals, bold max per column, display 3."""
+    n_meth = len(METHODS)
+    rows_4 = np.round(J_mean, 4)
+    means_4 = np.round(rows_4.mean(axis=1), 4)
+    best_per_col = rows_4.max(axis=0)
+    best_mean    = means_4.max()
+    lines = []
+    lines.append(r'\begin{table}[!htbp]')
+    lines.append(r'\centering')
+    lines.append(r'\caption{(Experiment B1) Mean Jaccard index over '
+                 r'100 realizations for semicircle fitting (50 points, '
+                 r'$\sigma = 1$~mm noise) under varying outlier counts.'
+                 r' All methods received identical point sets per realization.'
+                 r' Best value(s) per column in bold (4-decimal comparison).}')
+    lines.append(r'\label{tab:jaccard_results}')
+    lines.append(r'\resizebox{\textwidth}{!}{%')
+    lines.append(r'\begin{tabular}{lccccccc}')
+    lines.append(r'\hline')
+    header = r'Method \textbackslash $\;$No.\ outliers & ' + \
+             ' & '.join(str(o) for o in outs) + r' & Mean \\'
+    lines.append(header)
+    lines.append(r'\hline')
+    for k, m in enumerate(METHODS):
+        label = _B1_METHOD_LABEL.get(m, m)
+        cells = []
+        for oi, _ in enumerate(outs):
+            v = rows_4[k, oi]
+            s = f'{v:.3f}'
+            cells.append(rf'\textbf{{{s}}}' if v == best_per_col[oi] else s)
+        mv = means_4[k]
+        ms = f'{mv:.3f}'
+        cells.append(rf'\textbf{{{ms}}}' if mv == best_mean else ms)
+        lines.append(f'{label} & ' + ' & '.join(cells) + r' \\')
+    lines.append(r'\hline')
+    lines.append(r'\end{tabular}}')
+    lines.append(r'\end{table}')
+    path = os.path.join(OUTPUT_DIR, f'B1_Table_Jaccard_{DATE}.tex')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f"  Saved: {path}")
+
+
 def save_experiment_B1(res):
     n_meth = len(METHODS)
     outs   = res['outlier_range']
@@ -1001,6 +1124,9 @@ def save_experiment_B1(res):
         path = os.path.join(OUTPUT_DIR, f'B1_{tag}_{DATE}.csv')
         pd.DataFrame(rows).set_index('Method').to_csv(path)
         print(f"  Saved: {path}")
+
+    # ── LaTeX Table 2 — Jaccard with 4-decimal bolding, 3-decimal display ────
+    _export_B1_latex(res['J_mean'], outs)
 
     # Timing table: mean elapsed (s) and FPS per method × outlier count
     timing_rows = []
@@ -1040,6 +1166,44 @@ def save_experiment_B1(res):
     ax.legend(ncol=2, fontsize=9)
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, f'B1_Fig1_Jaccard_{DATE}.png')
+    plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
+    print(f"  Saved: {path}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FIGURE B1-1b — 2×3 scatter panel: 6 example realizations (0–5 outliers)
+    # Matches V02 Fig 2: DATA ONLY — blue inliers, red × outliers, dashed true arc.
+    # ══════════════════════════════════════════════════════════════════════════
+    theta_arc = np.linspace(0, np.pi, 300)
+    xarc_gt = B1_X0 + B1_R0 * np.cos(theta_arc)
+    yarc_gt = B1_Y0 + B1_R0 * np.sin(theta_arc)
+
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8), sharey=True, sharex=True)
+    axes = axes.flatten()
+    for ax, n_out in zip(axes, outs):
+        rng_ex = np.random.default_rng(seed=42 + n_out)
+        pts    = generate_semicircle_points(B1_X0, B1_Y0, B1_R0,
+                                            n_points=50, noise_std=1.0,
+                                            n_outliers=n_out, rng=rng_ex)
+        dists  = np.abs(np.sqrt((pts[:, 0] - B1_X0)**2 + (pts[:, 1] - B1_Y0)**2) - B1_R0)
+        is_out = dists > 5.0
+        ax.scatter(pts[~is_out, 0], pts[~is_out, 1],
+                   c='steelblue', s=22, zorder=4)
+        if is_out.any():
+            ax.scatter(pts[is_out, 0], pts[is_out, 1],
+                       c='crimson', marker='x', s=60, linewidths=1.8, zorder=5)
+        ax.plot(xarc_gt, yarc_gt, 'r--', linewidth=1.5, alpha=0.8)
+        ax.plot(B1_X0, B1_Y0, 'r+', markersize=12, markeredgewidth=1.5, zorder=6)
+        ax.set_title(f'{n_out} outlier{"s" if n_out != 1 else ""}', fontsize=10)
+        ax.set_aspect('equal')
+        ax.set_xlim(-70, 170); ax.set_ylim(-60, 180)
+        ax.set_xlabel('X (mm)', fontsize=9)
+        ax.set_ylabel('Y (mm)', fontsize=9)
+        ax.grid(alpha=0.2)
+    fig.suptitle('Experiment B1 — Synthetic Semicircle Realizations (0–5 outliers)\n'
+                 f'Center=({B1_X0},{B1_Y0}), r={B1_R0} mm, n=50, σ=1 mm',
+                 fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, f'B1_Fig1b_Scatter_{DATE}.png')
     plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
     print(f"  Saved: {path}")
 
@@ -1100,7 +1264,8 @@ def print_summary_B1(res):
 def run_experiment_B2():
     """
     Full circle: center (120,120), r=120 mm, N=100 pts.
-    Noise σ/r₀ ∈ {0,1,2,5,10}%, outlier% ∈ {0…70}, q ∈ {0,1,2,3,6,12,24,40}.
+    Noise σ/r₀ ∈ {0,1,2,5,10}%, outlier% ∈ {0…70}, q ∈ {0,1,2,4,8,16}.
+    Resolutions (240/q): inf, 240, 120, 60, 30, 15.
     100 Monte-Carlo iterations. Stores [min,mean,median,max,std] per cell.
     """
     x0, y0, r0 = B2_X0, B2_Y0, B2_R0
@@ -1108,7 +1273,7 @@ def run_experiment_B2():
 
     noise_pct   = [0, 1, 2, 5, 10]
     outlier_pct = [0, 10, 20, 30, 40, 50, 60, 70]
-    q_values    = [0, 1, 2, 3, 6, 12, 24, 40]
+    q_values    = [0, 1, 2, 4, 8, 16]
 
     nN, nO, nQ = len(noise_pct), len(outlier_pct), len(q_values)
     n_meth      = len(METHODS)
@@ -1134,9 +1299,13 @@ def run_experiment_B2():
                     xmax = max(x0_q + r0_q, 10)
                     ymax = max(y0_q + r0_q, 10)
                     rmax = max(int(r0_q * 2), 5)
+                    # Cap rmin so the quantized true radius is never filtered out.
+                    # Default rmin=4 was rejecting r0_q=3 at q=40 (12x12 resolution).
+                    rmin = min(4, max(1, r0_q - 1))
                 else:
                     x0_q, y0_q, r0_q = x0, y0, r0
                     xmax = x0 + r0; ymax = y0 + r0; rmax = int(r0 * 2)
+                    rmin = 4
 
                 J_buf = np.zeros((n_meth, N_ITER_B))
                 T_buf = np.zeros((n_meth, N_ITER_B))
@@ -1149,7 +1318,7 @@ def run_experiment_B2():
                     if len(pts_q) < 3:
                         continue
                     for k, method in enumerate(METHODS):
-                        cx, cy, r, elapsed = run_method_B(method, pts_q, xmax, ymax, rmax)
+                        cx, cy, r, elapsed = run_method_B(method, pts_q, xmax, ymax, rmax, rmin=rmin)
                         T_buf[k, it] = elapsed
                         if r > 0:
                             J_buf[k, it] = jaccard_circles(x0_q, y0_q, r0_q, cx, cy, r)
@@ -1377,6 +1546,110 @@ def save_experiment_B2(res):
     plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
     print(f"  Saved: {path}")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # FIGURE B2-5 — 3C-FBI performance category heatmap (3 noise levels)
+    # Matches V02 Fig 5: three panels noise=0%, 2%, 5% with categorical colours.
+    # ══════════════════════════════════════════════════════════════════════════
+    cat_bounds = [0.95, 0.90, 0.80, 0.70, 0.60, 0.50]
+    cat_labels = ['Excellent\n(≥0.95)', 'Very Good\n(≥0.90)', 'Good\n(≥0.80)',
+                  'Acceptable\n(≥0.70)', 'Marginal\n(≥0.60)', 'Poor\n(≥0.50)',
+                  'Very Poor\n(<0.50)']
+    cat_colors = ['#2166ac', '#4dac26', '#b8e186', '#f7f7f7', '#f1a340', '#d7191c', '#7b2d00']
+    fbi_idx = METHODS.index('3C-FBI')
+    noise_panel_vals = [0, 2, 5]
+    ni_panels = [noise_pct.index(n) for n in noise_panel_vals if n in noise_pct]
+
+    def _cat_idx(j_val):
+        for ci, bound in enumerate(cat_bounds):
+            if j_val >= bound:
+                return ci
+        return len(cat_bounds)
+
+    n_cats = len(cat_labels)
+    from matplotlib.colors import ListedColormap, BoundaryNorm
+    cmap_cat = ListedColormap(cat_colors)
+    norm_cat = BoundaryNorm(np.arange(-0.5, n_cats + 0.5), n_cats)
+
+    fig, axes = plt.subplots(1, len(ni_panels), figsize=(6.5 * len(ni_panels), 6), sharey=True)
+    if len(ni_panels) == 1:
+        axes = [axes]
+    for panel_i, (ax, ni) in enumerate(zip(axes, ni_panels)):
+        fbi_j_ni   = J_mean[fbi_idx, ni, :, :]
+        cat_matrix = np.vectorize(_cat_idx)(fbi_j_ni)
+        im = ax.imshow(cat_matrix, aspect='auto', cmap=cmap_cat, norm=norm_cat)
+        ax.set_xticks(range(nQ)); ax.set_xticklabels(q_labels, fontsize=9)
+        ax.set_yticks(range(nO)); ax.set_yticklabels(o_labels, fontsize=9)
+        ax.set_xlabel('Quantization Step q (coarser →)', fontsize=9)
+        ax.set_title(f'Noise = {noise_pct[ni]}%', fontsize=11, fontweight='bold')
+        if panel_i == 0:
+            ax.set_ylabel('Outlier Fraction p', fontsize=9)
+        for oi2 in range(nO):
+            for qi2 in range(nQ):
+                j_val = fbi_j_ni[oi2, qi2]
+                ci    = cat_matrix[oi2, qi2]
+                txt_color = 'white' if ci in (0, 5, 6) else 'black'
+                ax.text(qi2, oi2, f'{j_val:.3f}',
+                        ha='center', va='center', fontsize=7,
+                        color=txt_color, fontweight='bold')
+        ax.grid(False)
+    cbar = plt.colorbar(im, ax=axes[-1], ticks=range(n_cats), fraction=0.03, pad=0.02)
+    cbar.ax.set_yticklabels(cat_labels, fontsize=8.5)
+    cbar.set_label('Performance Category', fontsize=9)
+    fig.suptitle('Experiment B2 — 3C-FBI Performance measured by Jaccard Index\n'
+                 'across varying resolutions, noise levels, and outlier percentages',
+                 fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, f'B2_Fig5_PerfCategory_3CFBI_{DATE}.png')
+    plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
+    print(f"  Saved: {path}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FIGURE B2-6 — Spatial resolution visualization (one panel per q value)
+    # Matches V02 Fig 3: shows how quantization degrades the full-circle point
+    # cloud (noise=0%, outlier=0%), blue points connected in angular order.
+    # ══════════════════════════════════════════════════════════════════════════
+    res_labels = {0:  '∞ (continuous)', 1:  '240×240 px', 2:  '120×120 px',
+                  4:  '60×60 px',     8:  '30×30 px',    16: '15×15 px'}
+    nQ_vis   = len(q_values)
+    ncols_v  = 3
+    nrows_v  = (nQ_vis + ncols_v - 1) // ncols_v
+    fig, axes = plt.subplots(nrows_v, ncols_v, figsize=(5 * ncols_v, 4.5 * nrows_v))
+    axes = axes.flatten()
+    rng_vis   = np.random.default_rng(seed=0)
+    pts_full  = generate_circle_points(B2_X0, B2_Y0, B2_R0, B2_N_POINTS,
+                                       noise_std=0.0, n_outliers=0, rng=rng_vis)
+    for ax, q in zip(axes, q_values):
+        pts_q = apply_quantization(pts_full, q)
+        pts_plot = pts_q * q if q > 0 else pts_q.copy()
+        # Always draw the dashed reference at the true (un-quantized) generation
+        # circle so the visualization isolates point-cloud quantization error.
+        cx_plot, cy_plot, r_plot = B2_X0, B2_Y0, B2_R0
+        angles = np.arctan2(pts_plot[:, 1] - cy_plot, pts_plot[:, 0] - cx_plot)
+        order  = np.argsort(angles)
+        pts_s  = pts_plot[order]
+        pts_c  = np.vstack([pts_s, pts_s[0]])
+        ax.plot(pts_c[:, 0], pts_c[:, 1], '-o',
+                color='steelblue', markersize=4, linewidth=0.8, zorder=3)
+        theta_t = np.linspace(0, 2 * np.pi, 300)
+        ax.plot(cx_plot + r_plot * np.cos(theta_t),
+                cy_plot + r_plot * np.sin(theta_t),
+                'r--', linewidth=1.2, alpha=0.7, zorder=2)
+        ax.plot(cx_plot, cy_plot, 'r+', markersize=10, markeredgewidth=1.5, zorder=4)
+        ax.set_title(res_labels.get(q, f'q={q}'), fontsize=9.5)
+        ax.set_xlabel('X (mm)', fontsize=8)
+        ax.set_ylabel('Y (mm)', fontsize=8)
+        ax.set_aspect('equal')
+        ax.grid(alpha=0.2)
+    for ax in axes[nQ_vis:]:
+        ax.set_visible(False)
+    fig.suptitle('Experiment B2 — Spatial Resolution Effect on Full-Circle Point Cloud\n'
+                 f'Center=({B2_X0},{B2_Y0}), r={B2_R0} mm, N={B2_N_POINTS}, noise=0%, outlier=0%',
+                 fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, f'B2_Fig6_ResolutionPanel_{DATE}.png')
+    plt.savefig(path); plt.savefig(path.replace('.png', '.pdf')); plt.close()
+    print(f"  Saved: {path}")
+
 
 def print_summary_B2(res):
     print("\n" + "=" * 70)
@@ -1403,7 +1676,7 @@ def main():
     print("=" * 70)
     print("3C-FBI: Comprehensive Circle Fitting Evaluation")
     print("Exp A methods: CIBICA, 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi")
-    print("Exp B methods: 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi")
+    print("Exp B methods: CIBICA, 3C-FBI, RHT, RCD, RFCA, Nurunnabi, Guo, Greco, Qi")
     print("=" * 70)
 
     # ── Experiment A ──────────────────────────────────────────────────────────

@@ -1,0 +1,21 @@
+\begin{table}[!htbp]
+\centering
+\caption{(Experiment B1) Mean Jaccard index over 100 realizations for semicircle fitting (50 points, $\sigma = 1$~mm noise) under varying outlier counts. All methods received identical point sets per realization. Best value(s) per column in bold (4-decimal comparison).}
+\label{tab:jaccard_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\hline
+Method \textbackslash $\;$No.\ outliers & 0 & 1 & 2 & 3 & 4 & 5 & Mean \\
+\hline
+CIBICA \cite{romancibica} & 0.989 & 0.988 & 0.987 & 0.987 & 0.986 & 0.987 & 0.987 \\
+3C-FBI & \textbf{0.992} & \textbf{0.993} & 0.991 & 0.990 & 0.991 & \textbf{0.991} & \textbf{0.991} \\
+RHT - Xu et al.\ \cite{xu1990new} & 0.971 & 0.965 & 0.962 & 0.961 & 0.963 & 0.956 & 0.963 \\
+RCD - Chen and Chung \cite{chen2001efficient} & 0.988 & 0.987 & 0.987 & 0.988 & 0.987 & 0.986 & 0.987 \\
+RFCA - Ladr\'on de Guevara \cite{ladron2011robust} & 0.991 & 0.991 & 0.991 & 0.990 & 0.991 & 0.991 & 0.991 \\
+Nurunnabi et al.\ \cite{nurunnabi2018robust} & 0.991 & 0.987 & 0.986 & 0.982 & 0.980 & 0.981 & 0.984 \\
+Guo and Yang \cite{guo2019iterative} & 0.987 & 0.987 & 0.988 & 0.987 & 0.988 & 0.976 & 0.986 \\
+Greco et al.\ \cite{greco2023impartial} & 0.988 & 0.989 & 0.988 & 0.988 & 0.988 & 0.988 & 0.988 \\
+Qi et al.\ \cite{qi2024robust} & 0.991 & 0.991 & \textbf{0.992} & \textbf{0.990} & \textbf{0.991} & \textbf{0.991} & 0.991 \\
+\hline
+\end{tabular}}
+\end{table}
